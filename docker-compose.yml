@@ -1,8 +1,12 @@
+# Лимиты памяти (mem_limit). В Docker Desktop → Settings → Resources
+# выделите RAM не меньше суммы лимитов (~12–14 GB для всего стека).
 services:
   namenode:
     image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
     container_name: hadoop-namenode
     hostname: namenode
+    mem_limit: 1536m
+    memswap_limit: 1536m
     env_file:
       - ./hadoop/hadoop.env
     environment:
@@ -12,12 +16,24 @@ services:
     ports:
       - "9870:9870"   # NameNode UI
       - "9000:9000"   # HDFS
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "hdfs dfsadmin -safemode leave 2>/dev/null; hdfs dfsadmin -safemode get 2>/dev/null | grep -q 'Safe mode is OFF'",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 36
+      start_period: 40s
     restart: unless-stopped
 
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
     container_name: hadoop-datanode
     hostname: datanode
+    mem_limit: 1536m
+    memswap_limit: 1536m
     env_file:
       - ./hadoop/hadoop.env
     volumes:
@@ -32,6 +48,8 @@ services:
     image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
     container_name: hadoop-resourcemanager
     hostname: resourcemanager
+    mem_limit: 1024m
+    memswap_limit: 1024m
     env_file:
       - ./hadoop/hadoop.env
     ports:
@@ -45,6 +63,8 @@ services:
     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
     container_name: hadoop-nodemanager
     hostname: nodemanager
+    mem_limit: 1024m
+    memswap_limit: 1024m
     env_file:
       - ./hadoop/hadoop.env
     ports:
@@ -57,6 +77,8 @@ services:
     image: bde2020/hadoop-historyserver:2.0.0-hadoop3.2.1-java8
     container_name: hadoop-historyserver
     hostname: historyserver
+    mem_limit: 512m
+    memswap_limit: 512m
     env_file:
       - ./hadoop/hadoop.env
     ports:
@@ -66,28 +88,151 @@ services:
       - nodemanager
     restart: unless-stopped
 
+  hive-metastore-postgresql:
+    image: bde2020/hive-metastore-postgresql:2.3.0
+    container_name: hive-metastore-postgresql
+    hostname: hive-metastore-postgresql
+    mem_limit: 512m
+    memswap_limit: 512m
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+    volumes:
+      - hive_metastore_db:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"   # metastore DB (5433 на хосте, чтобы не конфликтовать с локальным Postgres)
+    restart: unless-stopped
+
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-metastore
+    hostname: hive-metastore
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    env_file:
+      - ./hadoop/hadoop.env
+      - ./hadoop/hive.env
+    command: /opt/hive/bin/hive --service metastore
+    environment:
+      SERVICE_PRECONDITION: "namenode:9870 datanode:9864 hive-metastore-postgresql:5432"
+    ports:
+      - "9083:9083"   # Metastore Thrift
+    depends_on:
+      namenode:
+        condition: service_started
+      datanode:
+        condition: service_started
+      hive-metastore-postgresql:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/9083'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-server
+    hostname: hive-server
+    mem_limit: 2048m
+    memswap_limit: 2048m
+    env_file:
+      - ./hadoop/hadoop.env
+      - ./hadoop/hive.env
+    volumes:
+      - ./hadoop/scripts/register-spells-table.sh:/scripts/register-spells-table.sh:ro
+    command: /opt/hive/bin/hive --service hiveserver2
+    environment:
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionURL: "jdbc:postgresql://hive-metastore-postgresql/metastore"
+      SERVICE_PRECONDITION: "hive-metastore:9083 namenode:9870 datanode:9864"
+    ports:
+      - "10000:10000"   # HiveServer2 (JDBC/Beeline)
+      - "10002:10002"   # Web UI
+    depends_on:
+      hive-metastore:
+        condition: service_healthy
+      namenode:
+        condition: service_started
+      datanode:
+        condition: service_started
+      resourcemanager:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/10000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 60s
+    restart: unless-stopped
+
   spark-jupyter:
     build: .
     image: pysparktest-jupyter:local
     container_name: spark_dataspell_container
     hostname: spark-jupyter
+    mem_limit: 6g
+    memswap_limit: 6g
+    shm_size: 512m
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8888:8888"
       - "4040:4040"
     environment:
       - JUPYTER_ENABLE_LAB=yes
       - JUPYTER_TOKEN=my_secret_token_123
-      - HADOOP_CONF_DIR=/etc/hadoop
+      - POSTGRES_JDBC_URL=jdbc:postgresql://host.docker.internal:5432/postgres
       - HDFS_URL=hdfs://namenode:9000
+      - HIVE_METASTORE_URI=thrift://hive-metastore:9083
+      - HIVE_SERVER_HOST=hive-server
+      - HIVE_SERVER_PORT=10000
+      - SPARK_HOME=/opt/spark
+      - JAVA8_HOME=/opt/java-8
+      - HIVE_HOME=/opt/hive
+      - HADOOP_HOME=/opt/hadoop-3.2.1
+      - HADOOP_CONF_DIR=/etc/hadoop
+      - SPARK_DRIVER_MEMORY=1g
+      # Maven/Ivy в контейнере часто ломается из-за прокси Docker Desktop
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - NO_PROXY=*
+    command:
+      - jupyter
+      - lab
+      - --ip=0.0.0.0
+      - --port=8888
+      - --no-browser
+      - --ServerApp.token=my_secret_token_123
+      - --ServerApp.allow_origin=*
+      - --ServerApp.disable_check_xsrf=True
     volumes:
       - ./notebooks:/home/jovyan/work
       - ./hadoop/conf:/etc/hadoop:ro
+      - ./hadoop/scripts/hive-java8.sh:/opt/hive/bin/hive-java8:ro
+    # Jupyter стартует без ожидания Hive — иначе DataSpell ловит Read timed out
     depends_on:
-      - namenode
-      - datanode
-      - resourcemanager
+      namenode:
+        condition: service_healthy
+      datanode:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python3 -c \"import socket; s=socket.create_connection(('127.0.0.1',8888),3); s.close()\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
   hadoop_namenode:
   hadoop_datanode:
+  hive_metastore_db:
