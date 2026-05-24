@@ -230,6 +230,7 @@ services:
       - https_proxy=
       - NO_PROXY=*
       - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_SERVE_URI=http://mlflow-serve:5001
       # MLflow/git: в контейнере нет git — не писать длинное предупреждение в ноутбук
       - GIT_PYTHON_REFRESH=quiet
     command:
@@ -253,6 +254,8 @@ services:
         condition: service_started
       mlflow:
         condition: service_started
+      mlflow-serve:
+        condition: service_started
     healthcheck:
       test:
         [
@@ -263,6 +266,40 @@ services:
       timeout: 5s
       retries: 24
       start_period: 30s
+    restart: unless-stopped
+
+  mlflow-serve:
+    image: ghcr.io/mlflow/mlflow:v2.18.0
+    container_name: mlflow-serve
+    hostname: mlflow-serve
+    mem_limit: 1024m
+    memswap_limit: 1024m
+    user: "0:0"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_MODEL_NAME=spells-classifier
+      - MLFLOW_SERVE_PORT=5001
+    entrypoint: /bin/bash
+    command: ["/scripts/mlflow-serve-entrypoint.sh"]
+    volumes:
+      - ./hadoop/scripts/mlflow-serve-entrypoint.sh:/scripts/mlflow-serve-entrypoint.sh:ro
+    ports:
+      - "5001:5001"
+    depends_on:
+      mlflow:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
     restart: unless-stopped
 
   mlflow:
