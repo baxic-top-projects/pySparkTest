@@ -27,7 +27,8 @@ RUN pip3 install --upgrade pip setuptools wheel \
     jupyterlab==4.3.4 \
     pandas \
     matplotlib \
-    scikit-learn
+    scikit-learn \
+    mlflow==2.18.0
 
 RUN python3 -c "import pyspark, os; os.symlink(os.path.dirname(pyspark.__file__), '/opt/spark', target_is_directory=True)"
 

@@ -1,6 +1,7 @@
 # Лимиты памяти (mem_limit). В Docker Desktop → Settings → Resources
 # выделите RAM не меньше суммы лимитов (~14–16 GB со стеком Airflow).
 # Airflow UI: http://localhost:8081 (admin / admin) — 8080 часто занят на хосте
+# MLflow UI: http://localhost:5000
 name: pysparktest
 
 x-airflow-common: &airflow-common
@@ -228,6 +229,9 @@ services:
       - http_proxy=
       - https_proxy=
       - NO_PROXY=*
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      # MLflow/git: в контейнере нет git — не писать длинное предупреждение в ноутбук
+      - GIT_PYTHON_REFRESH=quiet
     command:
       - jupyter
       - lab
@@ -247,6 +251,8 @@ services:
         condition: service_healthy
       datanode:
         condition: service_started
+      mlflow:
+        condition: service_started
     healthcheck:
       test:
         [
@@ -256,6 +262,45 @@ services:
       interval: 5s
       timeout: 5s
       retries: 24
+      start_period: 30s
+    restart: unless-stopped
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.18.0
+    container_name: mlflow-server
+    hostname: mlflow
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    user: "0:0"
+    environment:
+      - MLFLOW_SERVER_WORKERS=1
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+        mkdir -p /mlflow/artifacts
+        if [ -f /mlflow/mlflow.db ]; then
+          python3 -c "import sqlite3; c=sqlite3.connect('/mlflow/mlflow.db'); c.execute(\"DELETE FROM experiments WHERE lifecycle_stage='deleted'\"); c.commit()" 2>/dev/null || true
+        fi
+        # Артефакты только на сервере; клиент (Jupyter) грузит через HTTP (mlflow-artifacts:/).
+        # Не задавать --default-artifact-root=/mlflow/... — иначе клиент пишет в локальный /mlflow.
+        exec mlflow server \
+          --host 0.0.0.0 \
+          --port 5000 \
+          --workers 1 \
+          --backend-store-uri sqlite:////mlflow/mlflow.db \
+          --artifacts-destination /mlflow/artifacts \
+          --serve-artifacts
+    volumes:
+      - mlflow_data:/mlflow
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
       start_period: 30s
     restart: unless-stopped
 
@@ -341,3 +386,4 @@ volumes:
   hive_metastore_db:
   airflow_db:
   airflow_logs:
+  mlflow_data:
