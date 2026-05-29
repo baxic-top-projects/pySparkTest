@@ -95,7 +95,7 @@ print(f"Model ready (base={BASE_MODEL_NAME}).", flush=True)
 
 
 def _generate_once(prompt: str, max_new: int, do_sample: bool) -> tuple[str, str]:
-    inputs, enc_mode = tokenize_generation_prompt(
+    inputs, enc_mode, encoded_prompt = tokenize_generation_prompt(
         tokenizer, prompt, base_model_name=BASE_MODEL_NAME
     )
     if os.environ.get("DEEPSEEK_SERVE_DEBUG", "").lower() in ("1", "true", "yes"):
@@ -114,7 +114,9 @@ def _generate_once(prompt: str, max_new: int, do_sample: bool) -> tuple[str, str
         gen_kw.update(temperature=0.7, top_p=0.9)
     with torch.no_grad():
         out = model.generate(**inputs, **gen_kw)
-    text = decode_new_tokens(tokenizer, out[0], inputs, mode=enc_mode, prompt=prompt)
+    text = decode_new_tokens(
+        tokenizer, out[0], inputs, mode=enc_mode, encoded_prompt=encoded_prompt
+    )
     return trim_alpaca_completion(text), enc_mode
 
 

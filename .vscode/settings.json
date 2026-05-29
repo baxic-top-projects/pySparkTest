@@ -1,0 +1,4 @@
+{
+  "jupyter.jupyterServerType": "remote",
+  "jupyter.jupyterServerURI": "http://127.0.0.1:8888/?token=my_secret_token_123"
+}

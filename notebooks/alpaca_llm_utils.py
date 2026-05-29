@@ -370,6 +370,9 @@ def spark_texts_to_tokenized(
     train_texts = [r[text_column] for r in train_df.collect()]
     eval_texts = [r[text_column] for r in eval_df.collect()]
 
+    if not model_name:
+        model_name = getattr(tokenizer, "name_or_path", None) or ""
+
     use_chat = _is_deepseek_model(model_name) and hasattr(
         tokenizer, "apply_chat_template"
     )
@@ -736,6 +739,7 @@ def train_both_causal_lm(
             eval_sdf,
             tokenizer,
             max_length=profile.max_length,
+            model_name=profile.model_name,
         )
         print(f"tokenized: train={len(train_tok)}, eval={len(eval_tok)}")
 
