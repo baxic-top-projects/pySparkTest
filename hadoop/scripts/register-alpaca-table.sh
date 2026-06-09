@@ -5,9 +5,10 @@ set -euo pipefail
 HIVE_DB="${HIVE_DB:-pysparktest}"
 HIVE_TABLE="${HIVE_TABLE:-alpaca}"
 HDFS_PATH="${HDFS_PATH:-hdfs://namenode:9000/data/alpaca}"
+HIVE_BIN="${HIVE_BIN:-/opt/hive/bin/hive}"
 export HIVE_DB HIVE_TABLE HDFS_PATH
 
-hive -e "
+"${HIVE_BIN}" -e "
 CREATE DATABASE IF NOT EXISTS ${HIVE_DB};
 DROP TABLE IF EXISTS ${HIVE_DB}.${HIVE_TABLE};
 CREATE EXTERNAL TABLE ${HIVE_DB}.${HIVE_TABLE} (
